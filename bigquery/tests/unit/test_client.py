@@ -3284,6 +3284,253 @@ class TestClient(unittest.TestCase):
         self.assertEqual(req["path"], "/%s" % PATH)
         self.assertEqual(req["data"], SENT)
 
+    def test_insert_rows_w_invalid_schema(self):
+        from google.cloud.bigquery.table import Table
+        from google.cloud.bigquery.table import SchemaField
+
+        creds = _make_credentials()
+        http = object()
+        table = Table(self.TABLE_REF)
+        client = self._make_one(project=self.PROJECT, credentials=creds, _http=http)
+        schema = [
+            SchemaField("full_name", "STRING", mode="RECORD"),
+            SchemaField("age", "INTEGER", mode="RECORD"),
+        ]
+        ROWS = [("Phred Phlyntstone", 32)]
+
+        with self.assertRaises(ValueError) as exc:
+            client.insert_rows(table, ROWS, schema)
+
+        self.assertEqual(exc.exception.args, ("Unknown field mode: RECORD",))
+
+    def test_insert_rows_nested_w_schema(self):
+        import datetime
+        from google.cloud._helpers import UTC
+        from google.cloud._helpers import _datetime_to_rfc3339
+        from google.cloud._helpers import _microseconds_from_datetime
+        from google.cloud.bigquery.table import SchemaField
+
+        WHEN_TS = 1437767599.006
+        WHEN = datetime.datetime.utcfromtimestamp(WHEN_TS).replace(tzinfo=UTC)
+        PATH = "projects/%s/datasets/%s/tables/%s/insertAll" % (
+            self.PROJECT,
+            self.DS_ID,
+            self.TABLE_ID,
+        )
+        creds = _make_credentials()
+        http = object()
+        client = self._make_one(project=self.PROJECT, credentials=creds, _http=http)
+        conn = client._connection = _make_connection({})
+        schema = [
+            SchemaField("full_name", "STRING", mode="REQUIRED"),
+            SchemaField("age", "INTEGER", mode="REQUIRED"),
+            SchemaField("joined", "TIMESTAMP", mode="NULLABLE"),
+            SchemaField("episodes", "INTEGER", mode="REPEATED"),
+            SchemaField(
+                "hits",
+                "RECORD",
+                mode="REPEATED",
+                fields=(
+                    SchemaField(
+                        "products",
+                        "RECORD",
+                        mode="REPEATED",
+                        fields=(
+                            SchemaField("sku", "STRING"),
+                            SchemaField("brand", "STRING"),
+                            SchemaField("size", "INTEGER"),
+                        ),
+                    ),
+                ),
+            ),
+            SchemaField(
+                "items", "RECORD", mode="NULLABLE", fields=(SchemaField("car", "BOOL"),)
+            ),
+        ]
+        ROWS = [
+            (
+                "Phred Phlyntstone",
+                32,
+                _datetime_to_rfc3339(WHEN),
+                [1, 2, 3, 4],
+                (((("sku_0", "brand_0", 0), ("sku_1", "brand_1", 1)),),),
+                (True,),
+            ),
+            (
+                "Bharney Rhubble",
+                33,
+                WHEN + datetime.timedelta(seconds=1),
+                [1, 2, 3, 4],
+                (((("sku_2", "brand_2", 3), ("sku_3", "brand_3", 4)),),),
+                tuple(),
+            ),
+            (
+                "Wylma Phlyntstone",
+                29,
+                WHEN + datetime.timedelta(seconds=2),
+                [1, 2, 3, 4],
+                (((("sku_4", "brand_4", 5),),),),
+                None,
+            ),
+            (
+                "Bhettye Rhubble",
+                27,
+                None,
+                [1, 2, 3, 4],
+                (((("sku_4", "brand_4", 5),),),),
+                None,
+            ),
+            ("Bamm-Bamm Rubble", 4, None, [1, 2, 3], None, None),
+        ]
+
+        def _row_data(row):
+            joined = row[2]
+            if isinstance(row[2], datetime.datetime):
+                joined = _microseconds_from_datetime(joined) * 1e-6
+            hits_ = []
+            if row[4]:
+                for hit in list(row[4]):
+                    for product in hit:
+                        products_ = [
+                            {"sku": e[0], "brand": e[1], "size": str(e[2])}
+                            for e in product
+                        ]
+                    hits_.extend([{"products": products_}])
+
+            items_ = row[5]
+            if not items_:
+                items_ = {}
+            else:
+                items_ = {"car": "true" if items_ else "false"}
+            return {
+                "full_name": row[0],
+                "age": str(row[1]),
+                "joined": joined,
+                "episodes": [str(e) for e in row[3]],
+                "hits": hits_,
+                "items": items_,
+            }
+
+        SENT = {
+            "rows": [
+                {"json": _row_data(row), "insertId": str(i)}
+                for i, row in enumerate(ROWS)
+            ]
+        }
+
+        with mock.patch("uuid.uuid4", side_effect=map(str, range(len(ROWS)))):
+            # Test with using string IDs for the table.
+            errors = client.insert_rows(
+                "{}.{}".format(self.DS_ID, self.TABLE_ID), ROWS, selected_fields=schema
+            )
+
+        self.assertEqual(len(errors), 0)
+        conn.api_request.assert_called_once()
+        _, req = conn.api_request.call_args
+
+        self.assertEqual(req["method"], "POST")
+        self.assertEqual(req["path"], "/%s" % PATH)
+        self.assertEqual(req["data"], SENT)
+
+    def test_insert_rows_nested_dicts_and_tuples_w_schema(self):
+        import datetime
+        from google.cloud._helpers import UTC
+        from google.cloud._helpers import _datetime_to_rfc3339
+        from google.cloud.bigquery.table import SchemaField
+
+        WHEN_TS = 1437767599.006
+        WHEN = datetime.datetime.utcfromtimestamp(WHEN_TS).replace(tzinfo=UTC)
+        PATH = "projects/%s/datasets/%s/tables/%s/insertAll" % (
+            self.PROJECT,
+            self.DS_ID,
+            self.TABLE_ID,
+        )
+        creds = _make_credentials()
+        http = object()
+        client = self._make_one(project=self.PROJECT, credentials=creds, _http=http)
+        conn = client._connection = _make_connection({})
+        schema = [
+            SchemaField("full_name", "STRING", mode="REQUIRED"),
+            SchemaField("age", "INTEGER", mode="REQUIRED"),
+            SchemaField("joined", "TIMESTAMP", mode="NULLABLE"),
+            SchemaField("episodes", "INTEGER", mode="REPEATED"),
+            SchemaField(
+                "hits",
+                "RECORD",
+                mode="REPEATED",
+                fields=(
+                    SchemaField(
+                        "products",
+                        "RECORD",
+                        mode="REPEATED",
+                        fields=(
+                            SchemaField("sku", "STRING"),
+                            SchemaField("brand", "STRING"),
+                            SchemaField("size", "INTEGER"),
+                        ),
+                    ),
+                ),
+            ),
+            SchemaField(
+                "items", "RECORD", mode="NULLABLE", fields=(SchemaField("car", "BOOL"),)
+            ),
+        ]
+        ROWS = [
+            (
+                "Phred Phlyntstone",
+                32,
+                _datetime_to_rfc3339(WHEN),
+                [1, 2, 3, 4],
+                (
+                    {
+                        "products": [
+                            {"sku": "sku_0", "brand": "brand_0", "size": 0},
+                            {"sku": "sku_1", "brand": "brand_1", "size": 1},
+                        ]
+                    },
+                ),
+                (True,),
+            )
+        ]
+
+        def _row_data(row):
+            joined = row[2]
+            hits_ = list(row[4])
+            for hit in hits_:
+                for product_ in hit["products"]:
+                    product_["size"] = str(product_["size"])
+
+            items_ = {"car": "true" if row[5] else "false"}
+            return {
+                "full_name": row[0],
+                "age": str(row[1]),
+                "joined": joined,
+                "episodes": [str(e) for e in row[3]],
+                "hits": hits_,
+                "items": items_,
+            }
+
+        SENT = {
+            "rows": [
+                {"json": _row_data(row), "insertId": str(i)}
+                for i, row in enumerate(ROWS)
+            ]
+        }
+
+        with mock.patch("uuid.uuid4", side_effect=map(str, range(len(ROWS)))):
+            # Test with using string IDs for the table.
+            errors = client.insert_rows(
+                "{}.{}".format(self.DS_ID, self.TABLE_ID), ROWS, selected_fields=schema
+            )
+
+        self.assertEqual(len(errors), 0)
+        conn.api_request.assert_called_once()
+        _, req = conn.api_request.call_args
+
+        self.assertEqual(req["method"], "POST")
+        self.assertEqual(req["path"], "/%s" % PATH)
+        self.assertEqual(req["data"], SENT)
+
     def test_insert_rows_w_list_of_dictionaries(self):
         import datetime
         from google.cloud._helpers import UTC
@@ -3349,6 +3596,129 @@ class TestClient(unittest.TestCase):
             method="POST", path="/%s" % PATH, data=SENT
         )
 
+    def test_insert_rows_w_list_of_nested_dictionaries(self):
+        import datetime
+        from google.cloud._helpers import UTC
+        from google.cloud._helpers import _datetime_to_rfc3339
+        from google.cloud._helpers import _microseconds_from_datetime
+        from google.cloud.bigquery.table import Table, SchemaField
+
+        WHEN_TS = 1437767599.006
+        WHEN = datetime.datetime.utcfromtimestamp(WHEN_TS).replace(tzinfo=UTC)
+        PATH = "projects/%s/datasets/%s/tables/%s/insertAll" % (
+            self.PROJECT,
+            self.DS_ID,
+            self.TABLE_ID,
+        )
+        creds = _make_credentials()
+        http = object()
+        client = self._make_one(project=self.PROJECT, credentials=creds, _http=http)
+        conn = client._connection = _make_connection({})
+        schema = [
+            SchemaField("full_name", "STRING", mode="REQUIRED"),
+            SchemaField("age", "INTEGER", mode="REQUIRED"),
+            SchemaField("joined", "TIMESTAMP", mode="NULLABLE"),
+            SchemaField("episodes", "INTEGER", mode="REPEATED"),
+            SchemaField(
+                "hits",
+                "RECORD",
+                mode="REPEATED",
+                fields=(
+                    SchemaField(
+                        "products",
+                        "RECORD",
+                        mode="REPEATED",
+                        fields=(
+                            SchemaField("sku", "STRING"),
+                            SchemaField("brand", "STRING"),
+                            SchemaField("size", "INTEGER"),
+                        ),
+                    ),
+                ),
+            ),
+            SchemaField(
+                "items", "RECORD", mode="NULLABLE", fields=(SchemaField("car", "BOOL"),)
+            ),
+        ]
+        table = Table(self.TABLE_REF, schema=schema)
+        ROWS = [
+            {
+                "full_name": "Phred Phlyntstone",
+                "age": 32,
+                "joined": _datetime_to_rfc3339(WHEN),
+                "episodes": [1, 2, 3, 4],
+                "hits": [
+                    {
+                        "products": [
+                            {"sku": "sku_0", "brand": "brand_0", "size": 0},
+                            {"sku": "sku_1", "brand": "brand_1", "size": 1},
+                        ]
+                    }
+                ],
+                "items": {"car": True},
+            },
+            {
+                "full_name": "Bharney Rhubble",
+                "age": 33,
+                "joined": WHEN + datetime.timedelta(seconds=1),
+                "episodes": [1, 2, 3, 4],
+                "hits": [
+                    {
+                        "products": [
+                            {"sku": "sku_2", "brand": "brand_2", "size": 3},
+                            {"sku": "sku_3", "brand": "brand_3", "size": 4},
+                        ]
+                    }
+                ],
+                "items": {},
+            },
+            {
+                "full_name": "Wylma Phlyntstone",
+                "age": 29,
+                "joined": WHEN + datetime.timedelta(seconds=2),
+                "episodes": [1, 2, 3, 4],
+                "hits": [
+                    {"products": [{"sku": "sku_4", "brand": "brand_4", "size": 5}]}
+                ],
+            },
+            {"full_name": "Bhettye Rhubble", "age": 27, "joined": None},
+        ]
+
+        def _row_data(row):
+            joined = row["joined"]
+            if isinstance(joined, datetime.datetime):
+                row["joined"] = _microseconds_from_datetime(joined) * 1e-6
+            row["age"] = str(row["age"])
+            hits_ = row.get("hits")
+            if not hits_:
+                row["hits"] = []
+            else:
+                for hit in hits_:
+                    for product in hit["products"]:
+                        product["size"] = str(product["size"])
+            row["episodes"] = [str(e) for e in row.get("episodes", [])]
+            items_ = row.get("items")
+            if items_:
+                items_["car"] = "true"
+            else:
+                row["items"] = {}
+            return row
+
+        SENT = {
+            "rows": [
+                {"json": _row_data(row), "insertId": str(i)}
+                for i, row in enumerate(ROWS)
+            ]
+        }
+
+        with mock.patch("uuid.uuid4", side_effect=map(str, range(len(ROWS)))):
+            errors = client.insert_rows(table, ROWS)
+
+        self.assertEqual(len(errors), 0)
+        conn.api_request.assert_called_once_with(
+            method="POST", path="/%s" % PATH, data=SENT
+        )
+
     def test_insert_rows_w_list_of_Rows(self):
         from google.cloud.bigquery.table import Table
         from google.cloud.bigquery.table import SchemaField
@@ -3378,6 +3748,131 @@ class TestClient(unittest.TestCase):
 
         def _row_data(row):
             return {"full_name": row[0], "age": str(row[1])}
+
+        SENT = {
+            "rows": [
+                {"json": _row_data(row), "insertId": str(i)}
+                for i, row in enumerate(ROWS)
+            ]
+        }
+
+        with mock.patch("uuid.uuid4", side_effect=map(str, range(len(ROWS)))):
+            errors = client.insert_rows(table, ROWS)
+
+        self.assertEqual(len(errors), 0)
+        conn.api_request.assert_called_once_with(
+            method="POST", path="/%s" % PATH, data=SENT
+        )
+
+    def test_insert_rows_w_list_of_nested_Rows(self):
+        from google.cloud.bigquery.table import Table
+        from google.cloud.bigquery.table import SchemaField
+        from google.cloud.bigquery.table import Row
+
+        PATH = "projects/%s/datasets/%s/tables/%s/insertAll" % (
+            self.PROJECT,
+            self.DS_ID,
+            self.TABLE_ID,
+        )
+        creds = _make_credentials()
+        http = object()
+        client = self._make_one(project=self.PROJECT, credentials=creds, _http=http)
+        conn = client._connection = _make_connection({})
+        schema = [
+            SchemaField("full_name", "STRING", mode="REQUIRED"),
+            SchemaField("age", "INTEGER", mode="REQUIRED"),
+            SchemaField("episodes", "INTEGER", mode="REPEATED"),
+            SchemaField(
+                "hits",
+                "RECORD",
+                mode="REPEATED",
+                fields=(
+                    SchemaField(
+                        "products",
+                        "RECORD",
+                        mode="REPEATED",
+                        fields=(
+                            SchemaField("sku", "STRING"),
+                            SchemaField("brand", "STRING"),
+                            SchemaField("size", "INTEGER"),
+                        ),
+                    ),
+                ),
+            ),
+            SchemaField(
+                "items", "RECORD", mode="NULLABLE", fields=(SchemaField("car", "BOOL"),)
+            ),
+        ]
+        table = Table(self.TABLE_REF, schema=schema)
+        f2i = {"full_name": 0, "age": 1, "episodes": 2, "hits": 3, "items": 4}
+        ROWS = [
+            Row(
+                (
+                    "Phred Phlyntstone",
+                    32,
+                    [1, 2, 3, 4],
+                    [
+                        {
+                            "products": [
+                                {"sku": "sku_0", "brand": "brand_0", "size": 0},
+                                {"sku": "sku_1", "brand": "brand_1", "size": 1},
+                            ]
+                        }
+                    ],
+                    {"car": True},
+                ),
+                f2i,
+            ),
+            Row(
+                (
+                    "Bharney Rhubble",
+                    33,
+                    [1, 2, 3, 4],
+                    [
+                        {
+                            "products": [
+                                {"sku": "sku_2", "brand": "brand_2", "size": 3},
+                                {"sku": "sku_3", "brand": "brand_3", "size": 4},
+                            ]
+                        }
+                    ],
+                    {},
+                ),
+                f2i,
+            ),
+            Row(
+                (
+                    "Wylma Phlyntstone",
+                    29,
+                    [1, 2, 3, 4],
+                    [{"products": [{"sku": "sku_4", "brand": "brand_4", "size": 5}]}],
+                    None,
+                ),
+                f2i,
+            ),
+            Row(("Bhettye Rhubble", 27, [1, 2, 3, 4], None, None), f2i),
+        ]
+
+        def _row_data(row):
+            hits_ = row[3]
+            if not hits_:
+                hits_ = []
+            else:
+                for hit in hits_:
+                    for product_ in hit["products"]:
+                        product_["size"] = str(product_["size"])
+
+            items_ = {}
+            if row[4]:
+                items_["car"] = "true" if row[4]["car"] else "false"
+
+            return {
+                "full_name": row[0],
+                "age": str(row[1]),
+                "episodes": [str(e) for e in row[2]],
+                "hits": hits_,
+                "items": items_,
+            }
 
         SENT = {
             "rows": [
@@ -3490,7 +3985,10 @@ class TestClient(unittest.TestCase):
         ROWS = [(["red", "green"], [{"index": [1, 2], "score": [3.1415, 1.414]}])]
 
         def _row_data(row):
-            return {"color": row[0], "struct": row[1]}
+            struct_ = row[1]
+            for elem in struct_:
+                elem["index"] = [str(e) for e in elem["index"]]
+            return {"color": row[0], "struct": struct_}
 
         SENT = {
             "rows": [
@@ -3527,19 +4025,22 @@ class TestClient(unittest.TestCase):
             "phone", "RECORD", mode="NULLABLE", fields=[area_code, local_number, rank]
         )
         ROWS = [
-            (
-                "Phred Phlyntstone",
-                {"area_code": "800", "local_number": "555-1212", "rank": 1},
-            ),
-            (
-                "Bharney Rhubble",
-                {"area_code": "877", "local_number": "768-5309", "rank": 2},
-            ),
-            ("Wylma Phlyntstone", None),
+            ("Phred Phlyntstone", ("800", "555-1212", 1)),
+            ("Bharney Rhubble", ("877", "768-5309", 2)),
+            ("Wylma Phlyntstone", ()),
         ]
 
         def _row_data(row):
-            return {"full_name": row[0], "phone": row[1]}
+            phone_ = row[1]
+            if not phone_:
+                phone_ = {}
+            else:
+                phone_ = {
+                    "area_code": phone_[0],
+                    "local_number": phone_[1],
+                    "rank": str(phone_[2]),
+                }
+            return {"full_name": row[0], "phone": phone_}
 
         SENT = {
             "rows": [

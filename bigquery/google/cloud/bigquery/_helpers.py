@@ -307,7 +307,13 @@ def _time_to_json(value):
     return value
 
 
+def _str_to_json(value):
+    """Coerce 'value' to an JSON-compatible representation."""
+    return value
+
+
 # Converters used for scalar values marshalled as row data.
+# TODO: still need to add GEOGRAPHY data type support.
 _SCALAR_VALUE_TO_JSON_ROW = {
     "INTEGER": _int_to_json,
     "INT64": _int_to_json,
@@ -316,6 +322,7 @@ _SCALAR_VALUE_TO_JSON_ROW = {
     "NUMERIC": _decimal_to_json,
     "BOOLEAN": _bool_to_json,
     "BOOL": _bool_to_json,
+    "STRING": _str_to_json,
     "BYTES": _bytes_to_json,
     "TIMESTAMP": _timestamp_to_json_row,
     "DATETIME": _datetime_to_json,

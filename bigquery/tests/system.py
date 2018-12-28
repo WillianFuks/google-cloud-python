@@ -565,6 +565,27 @@ class TestBigQuery(unittest.TestCase):
         by_age = operator.itemgetter(1)
         self.assertEqual(sorted(row_tuples, key=by_age), sorted(ROWS, key=by_age))
 
+    def test_insert_rows_bitcoin_then_dump_table(self):
+        import google.cloud.bigquery as bq
+
+        bc_ds_ref = Config.CLIENT.dataset("bitcoin_blockchain", "bigquery-public-data")
+
+        bc_table_ref = bq.TableReference(bc_ds_ref, "transactions")
+        bc_table = Config.CLIENT.get_table(bc_table_ref)
+
+        bc_data = list(Config.CLIENT.list_rows(bc_table, max_results=1))
+
+        dest_dataset = self.temp_dataset(_make_dataset_id("insert_rows_then_dump"))
+        DEST_TABLE_ID = "test_table"
+        table_arg = Table(dest_dataset.table(DEST_TABLE_ID), schema=bc_table.schema)
+        self.assertFalse(_table_exists(table_arg))
+        table = retry_403(Config.CLIENT.create_table)(table_arg)
+        self.to_delete.insert(0, table)
+        self.assertTrue(_table_exists(table))
+
+        errors = Config.CLIENT.insert_rows(table, bc_data)
+        self.assertEqual(len(errors), 0)
+
     def test_load_table_from_local_avro_file_then_dump_table(self):
         from google.cloud.bigquery.job import SourceFormat
         from google.cloud.bigquery.job import WriteDisposition

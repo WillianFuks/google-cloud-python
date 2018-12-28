@@ -51,7 +51,6 @@ from google.cloud.bigquery.table import TableListItem
 from google.cloud.bigquery.table import TableReference
 from google.cloud.bigquery.table import RowIterator
 from google.cloud.bigquery.table import _TABLE_HAS_NO_SCHEMA
-from google.cloud.bigquery.table import _row_from_mapping
 
 
 _DEFAULT_CHUNKSIZE = 1048576  # 1024 * 1024 B = 1 MB
@@ -1495,22 +1494,92 @@ class Client(ClientWithProject):
         else:
             raise TypeError("table should be Table or TableReference")
 
-        json_rows = []
-
-        for index, row in enumerate(rows):
-            if isinstance(row, dict):
-                row = _row_from_mapping(row, schema)
-            json_row = {}
-
-            for field, value in zip(schema, row):
-                converter = _SCALAR_VALUE_TO_JSON_ROW.get(field.field_type)
-                if converter is not None:  # STRING doesn't need converting
-                    value = converter(value)
-                json_row[field.name] = value
-
-            json_rows.append(json_row)
-
+        json_rows = [self._build_stream_json(row, schema) for row in rows]
         return self.insert_rows_json(table, json_rows, **kwargs)
+
+    def _build_stream_json(self, data, schema):
+        """Builds a JSON-compatible mapping to be used in the the streaming API.
+
+        Args:
+            data (Union[Sequence[tuple], Sequence[dict]):
+                Input data to be streamed into table. It should follow the
+                specification as indicated in the `schema` input.
+            schema (Sequence[ \
+                :class:`~google.cloud.bigquery.schema.SchemaField`, \
+            ]):
+                Schema specification for interpreting input data.
+
+        Returns:
+            Sequence[Mappings]: JSON-compatible mapping to be used in streaming API.
+        """
+        stream_json = {}
+        idx = 0
+        for schema_field in schema:
+            name = schema_field.name
+            mode = schema_field.mode
+            fields = schema_field.fields
+            type_ = schema_field.field_type
+
+            repeated = mode == "REPEATED"
+
+            value = self._get_data_value(data, idx, name, mode)
+            idx += 1
+
+            if type_ in {"RECORD", "STRUCT"}:
+                if repeated:
+                    stream_json[name] = (
+                        [self._build_stream_json(record, fields) for record in value]
+                        if value
+                        else []
+                    )
+                else:
+                    stream_json[name] = (
+                        self._build_stream_json(value, fields) if value else {}
+                    )
+            else:
+                if repeated:
+                    stream_json[name] = [
+                        _SCALAR_VALUE_TO_JSON_ROW.get(type_)(e) for e in value
+                    ]
+                else:
+                    stream_json[name] = _SCALAR_VALUE_TO_JSON_ROW.get(type_)(value)
+        return stream_json
+
+    def _get_data_value(self, data, idx, name, mode):
+        """Retrieves specific value from 'data' either by an index (when input
+        data is a tuple) or by a key name (when it's a dictionary).
+
+        Args:
+            data (Union[Sequence[tuple], Sequence[dict]]):
+                Input data to be streamed to table. Can be either specified
+                as a tuple of tuples or as a dictionary.
+            idx (int):
+                If input 'data' is a tuple then this value specifies the index
+                to retrieve the value from.
+            name (str):
+                If input 'data' is a dictionary then this value specifieds the
+                key to retrieve the value from.
+            mode (str):
+                Specifies the mode of the value. It's either 'REQUIRED', 'NULLABLE'
+                or 'REPEATED'.
+
+        Returns:
+            value (Any): Returns value as specified by either 'idx' of 'name'.
+
+        Raises:
+            ValueError: If mode is not valid.
+        """
+        if mode not in {"REQUIRED", "REPEATED", "NULLABLE"}:
+            raise ValueError("Unknown field mode: {}".format(mode))
+
+        if isinstance(data, tuple):
+            value = data[idx] if len(data) > 0 else None
+        else:
+            value = data.get(name)
+
+        if not value and mode == "REPEATED":
+            value = []
+        return value
 
     def insert_rows_json(
         self,
@@ -1527,33 +1596,34 @@ class Client(ClientWithProject):
         See
         https://cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/insertAll
 
-        table (Union[ \
-            :class:`~google.cloud.bigquery.table.Table` \
-            :class:`~google.cloud.bigquery.table.TableReference`, \
-            str, \
-        ]):
-            The destination table for the row data, or a reference to it.
-        json_rows (Sequence[dict]):
-            Row data to be inserted. Keys must match the table schema fields
-            and values must be JSON-compatible representations.
-        row_ids (Sequence[str]):
-            (Optional) Unique ids, one per row being inserted. If omitted,
-            unique IDs are created.
-        skip_invalid_rows (bool):
-            (Optional) Insert all valid rows of a request, even if invalid
-            rows exist. The default value is False, which causes the entire
-            request to fail if any invalid rows exist.
-        ignore_unknown_values (bool):
-            (Optional) Accept rows that contain values that do not match the
-            schema. The unknown values are ignored. Default is False, which
-            treats unknown values as errors.
-        template_suffix (str):
-            (Optional) treat ``name`` as a template table and provide a suffix.
-            BigQuery will create the table ``<name> + <template_suffix>`` based
-            on the schema of the template table. See
-            https://cloud.google.com/bigquery/streaming-data-into-bigquery#template-tables
-        retry (:class:`google.api_core.retry.Retry`):
-            (Optional) How to retry the RPC.
+        Args:
+            table (Union[ \
+                :class:`~google.cloud.bigquery.table.Table` \
+                :class:`~google.cloud.bigquery.table.TableReference`, \
+                str, \
+            ]):
+                The destination table for the row data, or a reference to it.
+            json_rows (Sequence[dict]):
+                Row data to be inserted. Keys must match the table schema fields
+                and values must be JSON-compatible representations.
+            row_ids (Sequence[str]):
+                (Optional) Unique ids, one per row being inserted. If omitted,
+                unique IDs are created.
+            skip_invalid_rows (bool):
+                (Optional) Insert all valid rows of a request, even if invalid
+                rows exist. The default value is False, which causes the entire
+                request to fail if any invalid rows exist.
+            ignore_unknown_values (bool):
+                (Optional) Accept rows that contain values that do not match the
+                schema. The unknown values are ignored. Default is False, which
+                treats unknown values as errors.
+            template_suffix (str):
+                (Optional) treat ``name`` as a template table and provide a suffix.
+                BigQuery will create the table ``<name> + <template_suffix>`` based
+                on the schema of the template table. See
+                https://cloud.google.com/bigquery/streaming-data-into-bigquery#template-tables
+            retry (:class:`google.api_core.retry.Retry`):
+                (Optional) How to retry the RPC.
 
         Returns:
             Sequence[Mappings]:

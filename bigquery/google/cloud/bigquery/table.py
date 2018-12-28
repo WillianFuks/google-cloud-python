@@ -1049,40 +1049,6 @@ class TableListItem(object):
         return self.reference.to_bqstorage()
 
 
-def _row_from_mapping(mapping, schema):
-    """Convert a mapping to a row tuple using the schema.
-
-    Args:
-        mapping (Dict[str, object])
-            Mapping of row data: must contain keys for all required fields in
-            the schema. Keys which do not correspond to a field in the schema
-            are ignored.
-        schema (List[google.cloud.bigquery.schema.SchemaField]):
-            The schema of the table destination for the rows
-
-    Returns:
-        Tuple[object]:
-            Tuple whose elements are ordered according to the schema.
-
-    Raises:
-        ValueError: If schema is empty.
-    """
-    if len(schema) == 0:
-        raise ValueError(_TABLE_HAS_NO_SCHEMA)
-
-    row = []
-    for field in schema:
-        if field.mode == "REQUIRED":
-            row.append(mapping[field.name])
-        elif field.mode == "REPEATED":
-            row.append(mapping.get(field.name, ()))
-        elif field.mode == "NULLABLE":
-            row.append(mapping.get(field.name))
-        else:
-            raise ValueError("Unknown field mode: {}".format(field.mode))
-    return tuple(row)
-
-
 class StreamingBuffer(object):
     """Information about a table's streaming buffer.
 

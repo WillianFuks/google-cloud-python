@@ -402,8 +402,7 @@ class StructQueryParameter(_AbstractQueryParameter):
             else:
                 s_types[name] = {"name": name, "type": {"type": type_}}
                 converter = _SCALAR_VALUE_TO_JSON_PARAM.get(type_)
-                if converter is not None:
-                    value = converter(value)
+                value = converter(value)
                 values[name] = {"value": value}
 
         resource = {
